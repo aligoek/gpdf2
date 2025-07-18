@@ -1,0 +1,8 @@
+Flask
+Flask-Cors
+firebase-admin
+googletrans==4.0.0-rc1 # Kullandığınız sürümü doğrulayın
+PyPDF2
+reportlab
+gunicorn # Üretim sunucusu için eklendi
+python-dotenv # .env dosyasını okumak için
