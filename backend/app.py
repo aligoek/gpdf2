@@ -10,14 +10,14 @@ import os
 import threading
 import time
 import json
-import re # Metin temizliği için regex'i içe aktar
-import base64 # PDF içeriğini base64 olarak almak için eklendi
+import re # Import regex for text cleaning
+import base64 # Added to get PDF content as base64
 
-# .env dosyasından ortam değişkenlerini yüklemek için
+# To load environment variables from .env file
 from dotenv import load_dotenv
 load_dotenv()
 
-# PDF oluşturma için ReportLab içe aktarmaları
+# ReportLab imports for PDF creation
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
@@ -30,40 +30,40 @@ from reportlab.lib.colors import black
 app = Flask(__name__)
 CORS(app)
 
-# --- Firebase Yönetici SDK Başlatma ---
-# FIREBASE_SERVICE_ACCOUNT_KEY ortam değişkenini güvenli bir şekilde okuyun.
-# Bu değişken, Firebase hizmet hesabı JSON dosyanızın içeriğini bir dize olarak içermelidir.
-# Üretim ortamlarında bu değişkenin ayarlanması ZORUNLUDUR.
+# --- Firebase Admin SDK Initialization ---
+# Securely read the FIREBASE_SERVICE_ACCOUNT_KEY environment variable.
+# This variable should contain the content of your Firebase service account JSON file as a string.
+# It is MANDATORY to set this variable in production environments.
 try:
     service_account_info_json = os.environ.get('FIREBASE_SERVICE_ACCOUNT_KEY')
     if service_account_info_json:
-        # Ortam değişkeninden alınan JSON dizesini yükleyin
+        # Load the JSON string obtained from the environment variable
         cred = credentials.Certificate(json.loads(service_account_info_json))
     else:
-        # Ortam değişkeni ayarlanmamışsa açıkça hata verin
-        raise ValueError("FIREBASE_SERVICE_ACCOUNT_KEY ortam değişkeni ayarlanmadı. Firebase Yönetici SDK başlatılamıyor.")
+        # Explicitly raise an error if the environment variable is not set
+        raise ValueError("FIREBASE_SERVICE_ACCOUNT_KEY environment variable is not set. Cannot initialize Firebase Admin SDK.")
     
     firebase_admin.initialize_app(cred, {
-        # 'storageBucket': 'gpdf-c00c6.firebasestorage.app' # Firebase Depolama kullanılmıyorsa gerekli değil
+        # 'storageBucket': 'gpdf-c00c6.firebasestorage.app' # Not necessary if Firebase Storage is not used
     })
     db = firestore.client()
-    print("Firebase Yönetici SDK başarıyla başlatıldı. 🎉")
+    print("Firebase Admin SDK initialized successfully. 🎉")
 except Exception as e:
-    print(f"Firebase Yönetici SDK başlatılırken hata oluştu: {e}")
-    # Başlatma başarısız olursa 'db' değişkeninin None olduğundan emin olun
+    print(f"Error initializing Firebase Admin SDK: {e}")
+    # Ensure 'db' variable is None if initialization fails
     db = None 
 
-# --- Canvas ortamından genel değişkenler (ön uç için geçerli olsa da) ---
+# --- General variables from Canvas environment (though applicable for frontend) ---
 APP_ID = os.environ.get('CANVAS_APP_ID', 'default-app-id')
 
-# --- Çeviri Mantığı ---
+# --- Translation Logic ---
 translator = Translator()
-MAX_CHUNK_SIZE = 4800 # karakter
+MAX_CHUNK_SIZE = 4800 # characters
 
 def extract_text_from_pdf(pdf_bytes):
     """
-    PyPDF2 kullanarak PDF baytlarından metin çıkarır ve uygun kelime ve paragraf
-    ayrımı sağlamak için agresif temizleme yapar.
+    Extracts text from PDF bytes using PyPDF2 and performs aggressive cleaning
+    to ensure proper word and paragraph separation.
     """
     text = ""
     try:
@@ -73,87 +73,87 @@ def extract_text_from_pdf(pdf_bytes):
             page = reader.pages[page_num]
             extracted_page_text = page.extract_text() or ""
             
-            # --- Agresif Metin Temizliği ---
-            # 1. Tüm yeni satırları '\n' olarak normalleştirin
+            # --- Aggressive Text Cleaning ---
+            # 1. Normalize all newlines to '\n'
             extracted_page_text = extracted_page_text.replace('\r\n', '\n').replace('\r', '\n')
 
-            # 2. Yaygın ligatürleri veya sorunlu karakterleri değiştirin
+            # 2. Replace common ligatures or problematic characters
             extracted_page_text = extracted_page_text.replace('ﬁ', 'fi').replace('ﬀ', 'ff')
             
-            # 3. Satır sonundaki tireli kelimeleri birleştirin (örn: "trans-\nlation" -> "translation")
+            # 3. Join hyphenated words at line breaks (e.g., "trans-\nlation" -> "translation")
             extracted_page_text = re.sub(r'(\w+)-\s*\n\s*(\w+)', r'\1\2', extracted_page_text)
             
-            # 4. Tek yeni satırları (yumuşak satır sonları) bir boşlukla değiştirin.
-            # Bu, aynı mantıksal cümle/paragrafın parçası olan satırları birleştirmeye yardımcı olur.
-            # Alfanümerik karakter veya yaygın noktalama işaretinden sonra ve alfanümerik karakterden önce gelen yeni satırları hedefler.
+            # 4. Replace single newlines (soft line breaks) with a space.
+            # This helps to merge lines that are part of the same logical sentence/paragraph.
+            # Targets newlines that are after an alphanumeric character or common punctuation and before an alphanumeric character.
             extracted_page_text = re.sub(r'(?<=[a-zA-Z0-9.,;])\n(?=[a-zA-Z0-9])', ' ', extracted_page_text)
             
-            # 5. Birden fazla yeni satırı tam olarak iki yeni satıra (paragraf sonları) normalleştirin.
-            # Bu, yumuşak satır sonları işlendikten sonra tutarlı ve net paragraf ayrımı sağlar.
+            # 5. Normalize multiple newlines to exactly two newlines (paragraph breaks).
+            # This ensures consistent and clear paragraph separation after soft line breaks are handled.
             extracted_page_text = re.sub(r'\n{2,}', '\n\n', extracted_page_text)
             
-            # 6. Birden fazla boşluğu tek bir boşlukla değiştirin.
+            # 6. Replace multiple spaces with a single space.
             extracted_page_text = re.sub(r'\s+', ' ', extracted_page_text)
             
-            # 7. Sayfa içeriğinin başındaki/sonundaki boşlukları kırpın.
+            # 7. Trim whitespace from the beginning/end of the page content.
             extracted_page_text = extracted_page_text.strip()
 
             text += extracted_page_text
-            text += "\n\n---PAGE_BREAK---\n\n" # Sayfa sonları için özel ayırıcı
+            text += "\n\n---PAGE_BREAK---\n\n" # Special separator for page breaks
     except Exception as e:
-        print(f"PDF'den metin çıkarılırken hata oluştu: {e}")
+        print(f"Error extracting text from PDF: {e}")
         raise
     return text
 
 def chunk_text(text, max_chunk_size):
     """
-    Metni daha küçük parçalara böler, sayfa sonlarına uymaya çalışır.
+    Splits text into smaller chunks, trying to adhere to page breaks.
     """
     chunks = []
     current_chunk = ""
     pages = text.split("\n\n---PAGE_BREAK---\n\n")
 
     for page_content in pages:
-        # Mevcut sayfa içeriğini mevcut parçaya eklemek maksimum parça boyutunu aşarsa,
-        # veya mevcut parça boşsa ve sayfa içeriği çok büyükse,
-        # mevcut parçayı sonlandırın ve yeni bir tane başlatın.
+        # If adding the current page content to the current chunk exceeds max chunk size,
+        # or if the current chunk is empty and the page content is too large,
+        # finalize the current chunk and start a new one.
         if len(current_chunk) + len(page_content) + 2 <= max_chunk_size:
             current_chunk += (page_content + "\n\n")
         else:
-            if current_chunk: # Mevcut parçada içerik varsa, parçalara ekleyin
+            if current_chunk: # If there's content in the current chunk, add it to chunks
                 chunks.append(current_chunk.strip())
             
-            current_chunk = page_content + "\n\n" # Mevcut sayfa içeriğiyle yeni parça başlatın
+            current_chunk = page_content + "\n\n" # Start a new chunk with the current page content
             
-            # Tek bir sayfanın içeriği MAX_CHUNK_SIZE'dan büyükse,
-            # sayfa içinde cümle veya yeni satıra göre daha fazla bölün.
+            # If a single page's content is larger than MAX_CHUNK_SIZE,
+            # split further within the page by sentence or newline.
             while len(current_chunk) > max_chunk_size:
                 split_point = -1
-                # Limit içinde son noktadan bölmeye çalışın
+                # Try to split at the last period within the limit
                 last_period = current_chunk.rfind('.', 0, max_chunk_size)
                 if last_period != -1:
                     split_point = last_period + 1
-                # Nokta yoksa, son yeni satırdan (paragraf sonu) bölmeye çalışın
+                # If no period, try to split at the last newline (paragraph break)
                 if split_point == -1:
                     last_newline = current_chunk.rfind('\n', 0, max_chunk_size)
                     if last_newline != -1:
                         split_point = last_newline + 1
-                # Geri dönüş: doğal bir bölme noktası yoksa, sadece maksimum parça boyutunda kesin
+                # Fallback: if no natural split point, just cut at max chunk size
                 if split_point == -1 or split_point == 0:
                     split_point = max_chunk_size 
                 
                 chunks.append(current_chunk[:split_point].strip())
                 current_chunk = current_chunk[split_point:].strip()
     
-    # current_chunk'ta kalan içeriği ekleyin
+    # Add any remaining content in current_chunk
     if current_chunk:
         chunks.append(current_chunk.strip())
     
-    # Oluşturulmuş olabilecek boş parçaları filtreleyin
+    # Filter out any empty chunks that might have been created
     return [chunk for chunk in chunks if chunk]
 
 def translate_text_chunks(chunks, dest_lang, task_ref):
-    """Metin parçalarını çevirir ve Firestore ilerlemesini günceller."""
+    """Translates text chunks and updates Firestore progress."""
     translated_chunks = []
     total_chunks = len(chunks)
     for i, chunk in enumerate(chunks):
@@ -165,46 +165,46 @@ def translate_text_chunks(chunks, dest_lang, task_ref):
             })
             translated = translator.translate(chunk, dest=dest_lang)
             translated_chunks.append(translated.text)
-            time.sleep(0.5) # API hız sınırlarını aşmamak için küçük bir gecikme
+            time.sleep(0.5) # Small delay to avoid hitting API rate limits
         except Exception as e:
-            print(f"Parça {i+1} çevirilirken hata oluştu: {e}")
-            translated_chunks.append(f"[Parça {i+1} için Çeviri Hatası: {e}] Orijinal metin: {chunk}")
+            print(f"Error translating chunk {i+1}: {e}")
+            translated_chunks.append(f"[Translation Error for chunk {i+1}: {e}] Original text: {chunk}")
             task_ref.update({
                 'status': 'failed',
-                'errorMessage': f"Parça {i+1} çevirisi başarısız oldu: {e}"
+                'errorMessage': f"Translation of chunk {i+1} failed: {e}"
             })
             return None
     return translated_chunks
 
 def process_translation_task(task_id, user_id, file_name, pdf_content_base64, target_language):
     """
-    Tüm çeviri iş akışını ayrı bir iş parçacığında yönetir.
-    Şimdi PDF içeriğini doğrudan base64 dizesi olarak alır.
+    Manages the entire translation workflow in a separate thread.
+    Now receives PDF content directly as a base64 string.
     """
     if not db:
-        print(f"Görev {task_id} için Firebase Yönetici SDK başlatılmadı. İptal ediliyor.")
+        print(f"Firebase Admin SDK not initialized for task {task_id}. Aborting.")
         return
 
     task_ref = db.collection(f'artifacts/{APP_ID}/users/{user_id}/translations').document(task_id)
 
     try:
-        # Belgenin var olduğundan emin olmak için başlangıç güncellemesi için merge=True ile set kullanın
+        # Use set with merge=True for initial update to ensure the document exists
         task_ref.set({'status': 'processing', 'progress': 10, 'initialTimestamp': firestore.SERVER_TIMESTAMP}, merge=True)
         
         pdf_bytes = base64.b64decode(pdf_content_base64)
-        print(f"Görev {task_id} için PDF alındı ve çözüldü: {file_name}")
+        print(f"PDF received and decoded for task {task_id}: {file_name}")
 
         task_ref.update({'status': 'processing', 'progress': 30})
         original_text = extract_text_from_pdf(pdf_bytes)
-        print(f"Görev {task_id} için PDF'den metin çıkarıldı. Uzunluk: {len(original_text)} karakter.")
+        print(f"Text extracted from PDF for task {task_id}. Length: {len(original_text)} characters.")
 
         task_ref.update({'status': 'processing', 'progress': 50})
         chunks = chunk_text(original_text, MAX_CHUNK_SIZE)
-        print(f"Görev {task_id} için metin {len(chunks)} parçaya bölündü.")
+        print(f"Text for task {task_id} split into {len(chunks)} chunks.")
 
         translated_chunks = translate_text_chunks(chunks, target_language, task_ref)
         if translated_chunks is None:
-            return # Çeviri başarısız oldu, hata zaten Firestore'a bildirildi
+            return # Translation failed, error already reported to Firestore
 
         task_ref.update({
             'translatedContent': translated_chunks,
@@ -212,27 +212,27 @@ def process_translation_task(task_id, user_id, file_name, pdf_content_base64, ta
             'progress': 100,
             'completedAt': firestore.SERVER_TIMESTAMP
         })
-        print(f"Çeviri görevi {task_id} başarıyla tamamlandı.")
+        print(f"Translation task {task_id} completed successfully.")
 
     except Exception as e:
-        print(f"Çeviri görevi {task_id} işlenirken kritik hata: {e}")
+        print(f"Critical error processing translation task {task_id}: {e}")
         task_ref.update({
             'status': 'failed',
-            'errorMessage': f"Kritik arka uç hatası: {str(e)}",
+            'errorMessage': f"Critical backend error: {str(e)}",
             'failedAt': firestore.SERVER_TIMESTAMP
         })
 
-# --- Flask Rotaları ---
+# --- Flask Routes ---
 
 @app.route('/')
 def health_check():
-    return jsonify({"status": "Arka uç çalışıyor!"})
+    return jsonify({"status": "Backend is running!"})
 
 @app.route('/translate', methods=['POST'])
 def initiate_translation():
     """
-    Ön uçtan bir çeviri görevi başlatma isteği alır.
-    Şimdi PDF içeriğini base64 dizesi olarak alır.
+    Receives a translation task initiation request from the frontend.
+    Now receives PDF content as a base64 string directly.
     """
     data = request.json
     task_id = data.get('taskId')
@@ -242,25 +242,27 @@ def initiate_translation():
     target_language = data.get('targetLanguage')
 
     if not all([task_id, user_id, file_name, pdf_content_base64, target_language]):
-        return jsonify({"error": "Gerekli parametreler eksik"}), 400
+        return jsonify({"error": "Missing required parameters"}), 400
 
     if not db:
-        return jsonify({"error": "Firebase Yönetici SDK başlatılmadı. Arka uç günlüklerini kontrol edin."}), 500
+        return jsonify({"error": "Firebase Admin SDK not initialized. Check backend logs."}), 500
 
-    print(f"Kullanıcı {user_id} tarafından görev {task_id} için çeviri isteği alındı")
+    print(f"Translation request received for task {task_id} by user {user_id}")
 
     thread = threading.Thread(target=process_translation_task, 
                               args=(task_id, user_id, file_name, pdf_content_base64, target_language))
-    thread.daemon = True # Ana programın iş parçacığı hala çalışırken bile çıkmasına izin verir
+    thread.daemon = True # Allows the main program to exit even if the thread is still running
     thread.start()
 
-    return jsonify({"message": "Çeviri süreci başlatıldı", "taskId": task_id}), 202
+    return jsonify({"message": "Translation process initiated", "taskId": task_id}), 202
 
 
-# --- PDF Oluşturma Mantığı ---
+# --- PDF Generation Logic ---
 
-# Source Serif 4 yazı tiplerini kaydet
-# 'fonts/' dizininin arka uç ortamınızda bulunduğundan ve .ttf dosyalarını içerdiğinden emin olun.
+# Register Source Serif 4 fonts
+# Ensure the 'fonts/' directory is present in your backend environment and contains the .ttf files.
+# This 'fonts' directory should be in the ROOT directory of your project,
+# not inside the 'backend' folder, for Render to find it correctly.
 try:
     pdfmetrics.registerFont(TTFont('SourceSerif4-Regular', 'fonts/SourceSerif4-Regular.ttf'))
     pdfmetrics.registerFont(TTFont('SourceSerif4-Italic', 'fonts/SourceSerif4-Italic.ttf'))
@@ -270,34 +272,34 @@ try:
     pdfmetrics.registerFont(TTFont('SourceSerif4-Title', 'fonts/SourceSerif4_36pt-Regular.ttf'))
     pdfmetrics.registerFont(TTFont('SourceSerif4-Subtitle', 'fonts/SourceSerif4_18pt-Regular.ttf'))
 
-    print("Source Serif 4 yazı tipleri başarıyla kaydedildi.")
+    print("Source Serif 4 fonts registered successfully.")
 except Exception as e:
-    print(f"Source Serif 4 yazı tipleri kaydedilirken hata oluştu: {e}. PDF oluşturma varsayılan yazı tiplerini kullanabilir.")
+    print(f"Error registering Source Serif 4 fonts: {e}. PDF generation may use default fonts.")
 
-# Sonraki sayfalara sayfa numaraları eklemek için bir fonksiyon tanımlayın
+# Define a function to add page numbers to later pages
 def page_number_footer(canvas, doc):
     canvas.saveState()
     canvas.setFont('SourceSerif4-Regular', 9)
-    # Sayfa numarasını sağ alt köşeye konumlandırın
+    # Position the page number at the bottom right
     x_position = letter[0] - doc.rightMargin - (0.75 * inch)
     canvas.drawString(x_position, 0.75 * inch, f"Sayfa {doc.page}")
     canvas.restoreState()
 
-# Bir kapak sayfası için ilk sayfa düzeni fonksiyonunu tanımlayın
+# Define a first page layout function for a cover page
 def first_page_layout(canvas, doc):
     canvas.saveState()
     
     styles = getSampleStyleSheet()
 
-    # Kapak sayfasındaki ana başlık stili
-    cover_title_style = styles['h1']
+    # Main title style on the cover page
+    cover_title_style = styles['h1'] # Clone from Heading1
     cover_title_style.fontName = 'SourceSerif4-Title'
     cover_title_style.fontSize = 36
-    cover_title_style.leading = 40 # Satır aralığı
+    cover_title_style.leading = 40 # Line spacing
     cover_title_style.alignment = TA_CENTER
     cover_title_style.textColor = black
 
-    # Kapak sayfasındaki alt başlık stili (örn: "Şuraya Çevrildi X")
+    # Subtitle style on the cover page (e.g., "Translated to X")
     cover_subtitle_style = styles['Normal']
     cover_subtitle_style.fontName = 'SourceSerif4-Subtitle'
     cover_subtitle_style.fontSize = 14
@@ -307,35 +309,35 @@ def first_page_layout(canvas, doc):
 
     page_width, page_height = letter
 
-    # Ortalamak için içerik genişliğini ve x-ofsetini hesaplayın
+    # Calculate content width and x-offset for centering
     content_width = page_width - (1.5 * inch) * 2
     x_offset = 1.5 * inch
 
-    # Orijinal dosya adından ana başlık paragrafını oluşturun
+    # Create the main title paragraph from the original file name
     main_title_text = doc.original_file_name.replace('_', ' ').replace('.pdf', '')
     main_title_paragraph = Paragraph(main_title_text, cover_title_style)
 
-    # Ana başlık paragrafının boyutunu hesaplayın
+    # Calculate the size of the main title paragraph
     main_title_width, main_title_height = main_title_paragraph.wrapOn(canvas, content_width, page_height)
     
-    # Ana başlığı dikey olarak ortalayın, gerçek merkezin biraz üzerine
+    # Vertically center the main title, slightly above the true center
     main_title_y_position = (page_height / 2) - (main_title_height / 2) + (0.5 * inch)
 
-    # Ana başlığı tuvale çizin
+    # Draw the main title onto the canvas
     main_title_paragraph.drawOn(canvas, x_offset, main_title_y_position)
 
-    # "Şuraya Çevrildi" alt başlık paragrafını oluşturun
+    # Create the "Translated to" subtitle paragraph
     translated_to_text = f"Translated to {doc.target_language.upper()}"
     translated_to_paragraph = Paragraph(translated_to_text, cover_subtitle_style)
 
-    # Alt başlık paragrafının boyutunu hesaplayın
+    # Calculate the size of the subtitle paragraph
     translated_to_width, translated_to_height = translated_to_paragraph.wrapOn(canvas, content_width, page_height)
 
-    # Alt başlığı sayfanın altına tutarlı bir kenar boşluğuyla konumlandırın
+    # Position the subtitle at the bottom of the page with a consistent margin
     bottom_margin_for_subtitle = 1.5 * inch
     translated_to_y_position = bottom_margin_for_subtitle
 
-    # Alt başlığı tuvale çizin
+    # Draw the subtitle onto the canvas
     translated_to_paragraph.drawOn(canvas, x_offset, translated_to_y_position)
 
     canvas.restoreState()
@@ -344,7 +346,7 @@ def first_page_layout(canvas, doc):
 @app.route('/generate-pdf', methods=['POST'])
 def generate_pdf():
     """
-    Sağlanan çevrilmiş metinden estetik geliştirmelerle bir PDF oluşturur.
+    Generates a PDF from the provided translated text with aesthetic enhancements.
     """
     data = request.json
     translated_content = data.get('translatedContent')
@@ -352,76 +354,76 @@ def generate_pdf():
     target_language = data.get('targetLanguage', 'en')
 
     if not translated_content:
-        return jsonify({"error": "PDF oluşturma için çevrilmiş içerik sağlanmadı."}), 400
+        return jsonify({"error": "No translated content provided for PDF generation."}), 400
 
     buffer = io.BytesIO()
     
-    # Belgeyi sayfa boyutu, kenar boşlukları ve özel özniteliklerle yapılandırın
+    # Configure the document with page size, margins, and custom attributes
     doc = SimpleDocTemplate(buffer, pagesize=letter,
                             rightMargin=0.8*inch, leftMargin=0.8*inch,
                             topMargin=0.8*inch, bottomMargin=0.8*inch)
     
-    # Orijinal dosya adını ve hedef dili kapak sayfası için belge öznitelikleri olarak saklayın
+    # Store original file name and target language as document attributes for the cover page
     doc.original_file_name = original_file_name
     doc.target_language = target_language
 
     styles = getSampleStyleSheet()
     
-    # Başlık stilini özelleştirme
-    header_style = styles['h1'] # Heading1'den klonlayın
+    # Customize header style
+    header_style = styles['h1'] # Clone from Heading1
     header_style.fontName = 'SourceSerif4-Bold'
     header_style.fontSize = 18
     header_style.leading = 22
     header_style.alignment = TA_CENTER
-    header_style.spaceAfter = 12  # Başlık sonrası boşluk
+    header_style.spaceAfter = 12  # Space after header
 
-    # Alt başlık stilini özelleştirme
-    sub_header_style = styles['h2'] # Heading2'den klonlayın
+    # Customize sub-header style
+    sub_header_style = styles['h2'] # Clone from Heading2
     sub_header_style.fontName = 'SourceSerif4-Italic'
     sub_header_style.fontSize = 16
     sub_header_style.leading = 20
     sub_header_style.alignment = TA_LEFT
-    sub_header_style.spaceAfter = 8  # Alt başlık sonrası boşluk
+    sub_header_style.spaceAfter = 8  # Space after sub-header
 
-    # Normal metin stilini özelleştirme
+    # Customize normal text style
     body_style = styles['Normal']
     body_style.fontName = 'SourceSerif4-Regular'
     body_style.fontSize = 14
     body_style.leading = 20
     body_style.alignment = TA_LEFT
-    body_style.spaceAfter = 6  # Paragraflar arasında boşluk
+    body_style.spaceAfter = 6  # Space between paragraphs
 
     final_story = []
     
-    # Ana içeriğin kapaktan sonra yeni bir sayfada başlamasını sağlamak için sayfa sonu ekleyin
+    # Add a page break to ensure main content starts on a new page after the cover
     final_story.append(PageBreak()) 
     
-    # Çevrilmiş içeriği çift yeni satırlarla ayırarak paragraflar oluşturun
+    # Create paragraphs from translated content, split by double newlines
     for paragraph_text in translated_content.split('\n\n'):
-        if paragraph_text.strip():  # Boş satırları filtrelemek
-            # Başlıkları ve metinleri tespit et
-            # Basit bir sezgisel: Tamamen büyük harflerle yazılmış metni başlık olarak kabul et
+        if paragraph_text.strip():  # Filter out empty lines
+            # Detect headings and text
+            # Simple heuristic: treat text that is entirely uppercase as a heading
             if paragraph_text.isupper():
                 final_story.append(Paragraph(paragraph_text.strip(), header_style))
-            # Başka bir sezgisel: "Subtitle" ile başlayan metni alt başlık olarak kabul et
+            # Another heuristic: treat text starting with "Subtitle" as a sub-header
             elif paragraph_text.strip().lower().startswith("subtitle"):
                 final_story.append(Paragraph(paragraph_text.strip(), sub_header_style))
             else:
                 final_story.append(Paragraph(paragraph_text.strip(), body_style))
-            final_story.append(Spacer(1, 0.1 * inch))  # Paragraflar arasında boşluk
+            final_story.append(Spacer(1, 0.1 * inch))  # Space between paragraphs
 
     try:
-        # Tanımlanmış hikaye ve sayfa düzeni fonksiyonlarıyla PDF belgesini oluşturun
+        # Build the PDF document with defined story and page layout functions
         doc.build(final_story, 
-                  onFirstPage=first_page_layout, # Kapak sayfası düzenini uygulayın
-                  onLaterPages=page_number_footer) # Sonraki sayfalara sayfa numarası altbilgisini uygulayın
+                  onFirstPage=first_page_layout, # Apply cover page layout
+                  onLaterPages=page_number_footer) # Apply page number footer to subsequent pages
 
-        buffer.seek(0) # Arabelleği başa sarın
+        buffer.seek(0) # Rewind the buffer
         
-        # İndirme dosya adını oluşturun
+        # Create the download file name
         pdf_file_name = f"{os.path.splitext(original_file_name)[0]}_translated_{target_language}.pdf"
         
-        # Oluşturulan PDF dosyasını yanıt olarak gönderin
+        # Send the generated PDF file as a response
         return send_file(
             buffer,
             mimetype='application/pdf',
@@ -429,13 +431,8 @@ def generate_pdf():
             download_name=pdf_file_name
         )
     except Exception as e:
-        print(f"PDF oluşturulurken hata oluştu: {e}")
-        return jsonify({"error": f"PDF oluşturulamadı: {str(e)}"}), 500
+        print(f"Error creating PDF: {e}")
+        return jsonify({"error": f"Could not create PDF: {str(e)}"}), 500
 
-
-if __name__ == '__main__':
-    # 'fonts' dizininin app.py ile aynı konumda olduğundan
-    # ve 'SourceSerif4-Regular.ttf', 'SourceSerif4-Italic.ttf',
-    # 'SourceSerif4-Bold.ttf', 'SourceSerif4-BoldItalic.ttf',
-    # 'SourceSerif4_36pt-Regular.ttf', 'SourceSerif4_18pt-Regular.ttf' dosyalarını içerdiğinden emin olun.
-    app.run(debug=True, port=5000)
+# The `if __name__ == '__main__':` block is removed for Render deployment
+# as Gunicorn will manage the application's lifecycle.
