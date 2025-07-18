@@ -186,18 +186,28 @@ const PDFTranslator = () => {
     // Listen for translation task updates from Firestore
     useEffect(() => {
         if (currentUser && currentTaskId) {
+            console.log("useEffect: Setting up Firestore listener for task:", currentTaskId);
             const taskDocRef = doc(db, `artifacts/${appId}/users/${currentUser.uid}/translations`, currentTaskId);
             const unsubscribe = onSnapshot(taskDocRef, (docSnap) => {
                 if (docSnap.exists()) {
                     const data = docSnap.data();
+                    console.log("Firestore update received for task:", currentTaskId, "Data:", data); // Yeni log
                     setTranslationStatus(data.status || 'processing');
                     setUploadProgress(data.progress || 0);
                     if (data.translatedContent) {
                         setTranslatedContent(data.translatedContent.join('\n\n'));
                     }
                     if (data.status === 'completed' || data.status === 'failed') {
+                        console.log("Task completed/failed, clearing currentTaskId. Status:", data.status); // Yeni log
                         setCurrentTaskId(null);
                     }
+                } else {
+                    console.log("Firestore document no longer exists for task:", currentTaskId); // Yeni log
+                    // Belge silinmişse veya hiç oluşturulmamışsa, görevi başarısız olarak işaretle
+                    setTranslationStatus('failed');
+                    setModalMessage("Translation task document disappeared from Firestore.");
+                    setModalType('error');
+                    setCurrentTaskId(null);
                 }
             }, (error) => {
                 console.error("Error listening to task:", error);
@@ -205,7 +215,12 @@ const PDFTranslator = () => {
                 setModalType('error');
                 setTranslationStatus('failed');
             });
-            return () => unsubscribe();
+            return () => {
+                console.log("useEffect: Cleaning up Firestore listener for task:", currentTaskId); // Yeni log
+                unsubscribe();
+            };
+        } else {
+            console.log("useEffect: Not setting up listener. currentUser:", !!currentUser, "currentTaskId:", currentTaskId); // Yeni log
         }
     }, [currentUser, currentTaskId, db]);
 
@@ -289,7 +304,7 @@ const PDFTranslator = () => {
                 // Create a task in Firestore
                 const taskRef = doc(collection(db, `artifacts/${appId}/users/${userId}/translations`));
                 const taskId = taskRef.id;
-                setCurrentTaskId(taskId);
+                setCurrentTaskId(taskId); // currentTaskId'yi hemen ayarla ki listener kurulabilsin
 
                 console.log("Attempting to set Firestore document for task:", taskId);
                 await setDoc(taskRef, {
@@ -302,11 +317,12 @@ const PDFTranslator = () => {
                 });
                 console.log("Firestore document set successfully (or attempted).");
 
+                // Firestore listener'ın zaten kurulmuş olması beklenir.
+                // UI'ı hemen güncellemek için:
                 setTranslationStatus('processing');
                 setUploadProgress(0);
 
                 try {
-                    // ** Backend URL'si burada güncellendi **
                     const backendUrl = `${RENDER_BACKEND_URL}/translate`; 
                     console.log("Sending request to backend for translation to:", backendUrl);
                     const response = await fetch(backendUrl, {
@@ -330,11 +346,16 @@ const PDFTranslator = () => {
 
                     const result = await response.json();
                     console.log("Backend response:", result);
+                    // Backend'den başarılı yanıt alındı, şimdi Firestore güncellemelerini bekleyeceğiz.
                 } catch (backendError) {
                     console.error("Error triggering backend translation:", backendError);
                     setModalMessage(`Failed to trigger backend translation: ${backendError.message}`);
                     setModalType('error');
                     setTranslationStatus('failed');
+                    // Hata durumunda Firestore'u da güncelle
+                    if (taskRef) {
+                        await setDoc(taskRef, { status: 'failed', errorMessage: backendError.message }, { merge: true });
+                    }
                 }
             };
 
@@ -364,7 +385,6 @@ const PDFTranslator = () => {
             setModalMessage("Generating PDF, please wait...");
             setModalType('info');
 
-            // ** Backend URL'si burada güncellendi **
             const backendUrl = `${RENDER_BACKEND_URL}/generate-pdf`;
             const response = await fetch(backendUrl, {
                 method: 'POST',
