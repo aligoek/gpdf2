@@ -1,7 +1,6 @@
 import React, { useState, useEffect, createContext, useContext, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-// Removed getStorage, ref, uploadBytesResumable, getDownloadURL as files won't be stored in Firebase Storage
 import { getFirestore, doc, setDoc, onSnapshot, collection, query, orderBy } from 'firebase/firestore';
 
 // PDF.js worker for parsing PDFs in the browser
@@ -167,6 +166,9 @@ const PDFTranslator = () => {
     const [modalMessage, setModalMessage] = useState('');
     const [modalType, setModalType] = useState('info');
 
+    // ** Render Backend URL'si burada güncellendi **
+    const RENDER_BACKEND_URL = 'https://gpdf2.onrender.com'; 
+
     // Available target languages (ISO 639-1 codes)
     const languages = [
         { code: 'en', name: 'English' },
@@ -304,8 +306,9 @@ const PDFTranslator = () => {
                 setUploadProgress(0);
 
                 try {
-                    const backendUrl = 'http://127.0.0.1:5000/translate';
-                    console.log("Sending request to backend for translation...");
+                    // ** Backend URL'si burada güncellendi **
+                    const backendUrl = `${RENDER_BACKEND_URL}/translate`; 
+                    console.log("Sending request to backend for translation to:", backendUrl);
                     const response = await fetch(backendUrl, {
                         method: 'POST',
                         headers: {
@@ -361,7 +364,8 @@ const PDFTranslator = () => {
             setModalMessage("Generating PDF, please wait...");
             setModalType('info');
 
-            const backendUrl = 'http://127.0.0.1:5000/generate-pdf';
+            // ** Backend URL'si burada güncellendi **
+            const backendUrl = `${RENDER_BACKEND_URL}/generate-pdf`;
             const response = await fetch(backendUrl, {
                 method: 'POST',
                 headers: {
@@ -497,7 +501,7 @@ const PDFTranslator = () => {
                                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                                     </svg>
-                                    {translationStatus === 'uploading' ? 'Reading File...' : // Changed text
+                                    {translationStatus === 'uploading' ? 'Reading File...' : 
                                      translationStatus === 'processing' ? 'Processing...' :
                                      'Translating...'}
                                 </span>
@@ -513,7 +517,7 @@ const PDFTranslator = () => {
                                 style={{ width: `${uploadProgress}%` }}
                             ></div>
                             <p className="text-sm text-gray-600 dark:text-gray-400 text-center mt-2">
-                                {translationStatus === 'uploading' && `Reading File: ${uploadProgress.toFixed(1)}%`} {/* Changed text */}
+                                {translationStatus === 'uploading' && `Reading File: ${uploadProgress.toFixed(1)}%`} 
                                 {translationStatus === 'processing' && `Processing: ${uploadProgress.toFixed(1)}%`}
                                 {translationStatus === 'translating' && `Translating: ${uploadProgress.toFixed(1)}%`}
                             </p>
@@ -522,8 +526,8 @@ const PDFTranslator = () => {
 
                     {/* Translated Content Download Button (PDF only) */}
                     {translationStatus === 'completed' && translatedContent && (
-                        <div className="mt-8 p-4 bg-gray-100 dark:bg-gray-700 rounded-lg shadow-inner border border-gray-200 dark:border-gray-600 text-center"> {/* Adjusted dark background and border for subtlety */}
-                            <p className="text-lg font-medium text-gray-700 dark:text-gray-300 mb-4">Translation completed successfully!</p> {/* Adjusted text color for subtlety */}
+                        <div className="mt-8 p-4 bg-gray-100 dark:bg-gray-700 rounded-lg shadow-inner border border-gray-200 dark:border-gray-600 text-center"> 
+                            <p className="text-lg font-medium text-gray-700 dark:text-gray-300 mb-4">Translation completed successfully!</p> 
                             <button
                                 onClick={handleDownloadPdf}
                                 className="w-full py-3 px-8 rounded-full font-semibold text-lg shadow-md transition-all duration-300 bg-gray-600 text-white hover:bg-gray-700 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 hover:shadow-lg transform hover:-translate-y-0.5"
