@@ -1,12 +1,10 @@
+// App.jsx
 import React, { useState, useEffect, createContext, useContext, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, setDoc, onSnapshot, collection, query, orderBy } from 'firebase/firestore';
+import { getFirestore, doc, setDoc, onSnapshot, collection, query, orderBy, getDoc } from 'firebase/firestore'; 
 
-// PDF.js worker for parsing PDFs in the browser
 import * as pdfjsLib from 'pdfjs-dist/build/pdf.min.mjs';
-
-// Set the worker source to a CDN URL for compatibility
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
 
 
@@ -22,13 +20,10 @@ const firebaseConfig = {
     appId: "1:1078821179939:web:1e15aaddf146139c225796"
 };
 
-const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-// Removed storage initialization as it's no longer used for temporary files
 
 // --- Contexts for Global State Management ---
 
@@ -38,8 +33,15 @@ const AuthContext = createContext(null);
 export const AuthProvider = ({ children }) => {
     const [currentUser, setCurrentUser] = useState(null);
     const [loadingAuth, setLoadingAuth] = useState(true);
+    // db ve auth instance'larını AuthContext'e ekle
+    const [firestoreDb, setFirestoreDb] = useState(null); 
+    const [firebaseAuth, setFirebaseAuth] = useState(null);
 
     useEffect(() => {
+        // Firebase init'i burada yap, böylece db ve auth instance'ları context'e sağlanabilir
+        setFirestoreDb(getFirestore(app));
+        setFirebaseAuth(getAuth(app));
+
         const unsubscribe = onAuthStateChanged(auth, async (user) => {
             if (user) {
                 setCurrentUser(user);
@@ -56,7 +58,7 @@ export const AuthProvider = ({ children }) => {
     }, []);
 
     return (
-        <AuthContext.Provider value={{ currentUser, loadingAuth }}>
+        <AuthContext.Provider value={{ currentUser, loadingAuth, db: firestoreDb, auth: firebaseAuth }}> {/* db ve auth eklendi */}
             {children}
         </AuthContext.Provider>
     );
@@ -117,19 +119,25 @@ const MessageModal = ({ message, onClose, type = 'info' }) => {
 // --- Navigation Bar Component ---
 const Navbar = () => {
     const { theme, toggleTheme } = useContext(ThemeContext);
+    const { currentUser } = useContext(AuthContext); // currentUser'ı buradan al
 
     return (
         <nav className="bg-white dark:bg-gray-800 shadow-md p-4 w-full">
             <div className="max-w-screen-xl mx-auto flex justify-between items-center">
                 <div className="text-2xl font-bold text-gray-800 dark:text-gray-100">
-                    PDF Translator
+                    G-PDF Translator
                 </div>
-                <button
-                    onClick={toggleTheme}
-                    className="px-4 py-2 rounded-full bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 shadow-sm hover:shadow-md transition-all duration-300 text-sm font-medium"
-                >
-                    {theme === 'light' ? 'Dark Mode' : 'Light Mode'}
-                </button>
+                <div className="flex items-center space-x-4">
+                    {currentUser && (
+                        <span className="text-gray-600 dark:text-gray-300 text-sm">User ID: {currentUser.uid}</span>
+                    )}
+                    <button
+                        onClick={toggleTheme}
+                        className="px-4 py-2 rounded-full bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 shadow-sm hover:shadow-md transition-all duration-300 text-sm font-medium"
+                    >
+                        {theme === 'light' ? 'Dark Mode' : 'Light Mode'}
+                    </button>
+                </div>
             </div>
         </nav>
     );
@@ -140,11 +148,11 @@ const Footer = () => {
     return (
         <footer className="bg-gray-100 dark:bg-gray-900 text-gray-600 dark:text-gray-400 p-6 text-center text-sm mt-auto">
             <div className="max-w-screen-xl mx-auto flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0">
-                <p>&copy; {new Date().getFullYear()} PDF Translator. All rights reserved.</p>
+                <p>&copy; {new Date().getFullYear()} G-PDF Translator. All rights reserved.</p>
                 <div className="flex space-x-6">
-                    <a href="#" className="hover:text-blue-600 dark:hover:text-blue-400 transition-colors duration-200">About the Site</a>
-                    <a href="#" className="hover:text-blue-600 dark:hover:text-blue-400 transition-colors duration-200">Contact Us</a>
-                    <a href="#" className="hover:text-blue-600 dark:hover:text-blue-400 transition-colors duration-200">Follow Us</a>
+                    <a href="#" className="hover:text-blue-600 dark:hover:text-blue-400 transition-colors duration-200">Contact Me</a>
+                    <a href="mailto:aligoek@outlook.com" className="hover:text-blue-600 dark:hover:text-blue-400 transition-colors duration-200">aligoek@outlook.com</a>
+                    
                 </div>
             </div>
         </footer>
@@ -154,7 +162,7 @@ const Footer = () => {
 
 // --- Main PDF Translator Component ---
 const PDFTranslator = () => {
-    const { currentUser, loadingAuth } = useContext(AuthContext);
+    const { currentUser, loadingAuth, db } = useContext(AuthContext); // db'yi buradan al
     const { theme } = useContext(ThemeContext);
 
     const [selectedFile, setSelectedFile] = useState(null);
@@ -166,10 +174,9 @@ const PDFTranslator = () => {
     const [modalMessage, setModalMessage] = useState('');
     const [modalType, setModalType] = useState('info');
 
-    // ** Render Backend URL'si burada güncellendi **
-    const RENDER_BACKEND_URL = 'https://gpdf2.onrender.com'; 
+    // --- UPDATED: Using the correct Cloud Function URL ---
+    const RENDER_BACKEND_URL = 'https://us-central1-gpdf-c00c6.cloudfunctions.net/pdf_translator_app'; 
 
-    // Available target languages (ISO 639-1 codes)
     const languages = [
         { code: 'en', name: 'English' },
         { code: 'tr', name: 'Turkish' },
@@ -185,44 +192,52 @@ const PDFTranslator = () => {
 
     // Listen for translation task updates from Firestore
     useEffect(() => {
-        if (currentUser && currentTaskId) {
+        let unsubscribe;
+        // userId'yi currentUser'dan al, db'yi useContext'ten al
+        const userId = currentUser?.uid; 
+
+        if (currentUser && currentTaskId && db && userId) { 
             console.log("useEffect: Setting up Firestore listener for task:", currentTaskId);
-            const taskDocRef = doc(db, `artifacts/${appId}/users/${currentUser.uid}/translations`, currentTaskId);
-            const unsubscribe = onSnapshot(taskDocRef, (docSnap) => {
+            const taskDocRef = doc(db, `artifacts/${appId}/users/${userId}/translations`, currentTaskId);
+            
+            unsubscribe = onSnapshot(taskDocRef, (docSnap) => {
+                console.log(`[onSnapshot] Listener triggered for task: ${currentTaskId}. Document exists: ${docSnap.exists()}`);
                 if (docSnap.exists()) {
                     const data = docSnap.data();
-                    console.log("Firestore update received for task:", currentTaskId, "Data:", data); // Yeni log
+                    console.log(`[onSnapshot] Data received for task ${currentTaskId}:`, data);
+                    console.log(`[onSnapshot] UI state updated: status=${data.status}, progress=${data.progress}`);
                     setTranslationStatus(data.status || 'processing');
                     setUploadProgress(data.progress || 0);
                     if (data.translatedContent) {
                         setTranslatedContent(data.translatedContent.join('\n\n'));
                     }
                     if (data.status === 'completed' || data.status === 'failed') {
-                        console.log("Task completed/failed, clearing currentTaskId. Status:", data.status); // Yeni log
-                        setCurrentTaskId(null);
+                        console.log(`[onSnapshot] Task ${currentTaskId} completed/failed. Status: ${data.status}. Clearing currentTaskId.`);
+                        setCurrentTaskId(null); 
                     }
                 } else {
-                    console.log("Firestore document no longer exists for task:", currentTaskId); // Yeni log
-                    // Belge silinmişse veya hiç oluşturulmamışsa, görevi başarısız olarak işaretle
+                    console.log(`[onSnapshot] Firestore document for task ${currentTaskId} no longer exists.`);
                     setTranslationStatus('failed');
                     setModalMessage("Translation task document disappeared from Firestore.");
                     setModalType('error');
                     setCurrentTaskId(null);
                 }
             }, (error) => {
-                console.error("Error listening to task:", error);
+                console.error(`[onSnapshot] Error listening to task ${currentTaskId}:`, error);
                 setModalMessage("Error fetching translation status. Please try again.");
                 setModalType('error');
                 setTranslationStatus('failed');
             });
-            return () => {
-                console.log("useEffect: Cleaning up Firestore listener for task:", currentTaskId); // Yeni log
-                unsubscribe();
-            };
         } else {
-            console.log("useEffect: Not setting up listener. currentUser:", !!currentUser, "currentTaskId:", currentTaskId); // Yeni log
+            console.log("useEffect: Not setting up listener. currentUser:", !!currentUser, "currentTaskId:", currentTaskId, "db:", !!db);
         }
-    }, [currentUser, currentTaskId, db]);
+        return () => {
+            if (unsubscribe) {
+                console.log(`useEffect: Cleaning up Firestore listener for task: ${currentTaskId} (if active).`);
+                unsubscribe();
+            }
+        };
+    }, [currentUser, currentTaskId, db, appId]); // db bağımlılıklara eklendi
 
     const handleFileChange = (event) => {
         const file = event.target.files[0];
@@ -272,6 +287,11 @@ const PDFTranslator = () => {
             setModalType('error');
             return;
         }
+        if (!db) { // db'nin hazır olduğundan emin ol
+            setModalMessage("Firestore database not initialized. Please wait.");
+            setModalType('error');
+            return;
+        }
 
         setTranslationStatus('uploading'); // This will now represent "reading file"
         setUploadProgress(0);
@@ -279,52 +299,54 @@ const PDFTranslator = () => {
         setModalMessage('');
 
         try {
-            // Read PDF file as ArrayBuffer
             const reader = new FileReader();
             reader.readAsArrayBuffer(selectedFile);
 
-            reader.onloadstart = () => setUploadProgress(0);
+            reader.onloadstart = () => {
+                setUploadProgress(0);
+                console.log("[handleTranslate] File reading started. Progress: 0%");
+            };
             reader.onprogress = (event) => {
                 if (event.lengthComputable) {
-                    setUploadProgress((event.loaded / event.total) * 100);
+                    const progress = (event.loaded / event.total) * 100;
+                    setUploadProgress(progress);
+                    console.log(`[handleTranslate] File reading progress: ${progress.toFixed(1)}%`);
                 }
             };
 
             reader.onload = async (e) => {
                 const arrayBuffer = e.target.result;
-                // Convert ArrayBuffer to Base64 string
                 const base64Pdf = btoa(
                     new Uint8Array(arrayBuffer)
                         .reduce((data, byte) => data + String.fromCharCode(byte), '')
                 );
+                console.log("[handleTranslate] File reading completed. Converting to Base64.");
 
                 const userId = currentUser.uid;
                 const fileName = selectedFile.name;
 
-                // Create a task in Firestore
                 const taskRef = doc(collection(db, `artifacts/${appId}/users/${userId}/translations`));
                 const taskId = taskRef.id;
                 setCurrentTaskId(taskId); // currentTaskId'yi hemen ayarla ki listener kurulabilsin
+                console.log("[handleTranslate] New task ID generated and set:", taskId);
 
-                console.log("Attempting to set Firestore document for task:", taskId);
+                console.log("[handleTranslate] Attempting to set Firestore document for task:", taskId);
                 await setDoc(taskRef, {
                     fileName: fileName,
                     targetLanguage: targetLanguage,
-                    // No storagePath needed as file is sent directly
                     status: 'processing',
                     progress: 0,
                     timestamp: new Date(),
                 });
-                console.log("Firestore document set successfully (or attempted).");
+                console.log("[handleTranslate] Firestore document for new task initiated successfully.");
 
-                // Firestore listener'ın zaten kurulmuş olması beklenir.
-                // UI'ı hemen güncellemek için:
-                setTranslationStatus('processing');
-                setUploadProgress(0);
+                setTranslationStatus('processing'); // UI'ı hemen güncelle
+                console.log("[handleTranslate] UI status set to 'processing'.");
 
                 try {
+                    // The backend URL is now correct. The path should be /translate
                     const backendUrl = `${RENDER_BACKEND_URL}/translate`; 
-                    console.log("Sending request to backend for translation to:", backendUrl);
+                    console.log("[handleTranslate] Sending request to backend for translation to:", backendUrl);
                     const response = await fetch(backendUrl, {
                         method: 'POST',
                         headers: {
@@ -334,25 +356,36 @@ const PDFTranslator = () => {
                             taskId: taskId,
                             userId: userId,
                             fileName: fileName,
-                            pdfContent: base64Pdf, // Send Base64 PDF content
+                            pdfContent: base64Pdf,
                             targetLanguage: targetLanguage,
                         }),
                     });
+                    console.log("[handleTranslate] Backend fetch response received.");
 
+                    // --- Improved Error Handling ---
                     if (!response.ok) {
-                        const errorData = await response.json();
-                        throw new Error(`Backend error: ${errorData.error || response.statusText}`);
+                        let errorDetails = `Status: ${response.status} ${response.statusText || ''}`;
+                        try {
+                            const errorData = await response.json();
+                            errorDetails = `Backend error: ${errorData.error || JSON.stringify(errorData)}`;
+                        } catch (jsonParseError) {
+                            const rawText = await response.text();
+                            errorDetails = `Backend error (not JSON): ${rawText.substring(0, 200)}...`;
+                        }
+                        throw new Error(errorDetails);
                     }
 
                     const result = await response.json();
-                    console.log("Backend response:", result);
-                    // Backend'den başarılı yanıt alındı, şimdi Firestore güncellemelerini bekleyeceğiz.
+                    console.log("[handleTranslate] Backend response (successful):", result);
+                    
+                    // The onSnapshot listener will handle the UI updates from here.
+                    // No need for manual refetching.
+
                 } catch (backendError) {
-                    console.error("Error triggering backend translation:", backendError);
+                    console.error("[handleTranslate] Error triggering backend translation:", backendError);
                     setModalMessage(`Failed to trigger backend translation: ${backendError.message}`);
                     setModalType('error');
                     setTranslationStatus('failed');
-                    // Hata durumunda Firestore'u da güncelle
                     if (taskRef) {
                         await setDoc(taskRef, { status: 'failed', errorMessage: backendError.message }, { merge: true });
                     }
@@ -360,14 +393,14 @@ const PDFTranslator = () => {
             };
 
             reader.onerror = (error) => {
-                console.error("Error reading file:", error);
+                console.error("[handleTranslate] Error reading file:", error);
                 setModalMessage("Error reading PDF file. Please try again.");
                 setModalType('error');
                 setTranslationStatus('failed');
             };
 
         } catch (error) {
-            console.error("Error initiating translation (overall):", error);
+            console.error("[handleTranslate] Error initiating translation (overall):", error);
             setModalMessage(`Error initiating translation: ${error.message}`);
             setModalType('error');
             setTranslationStatus('failed');
@@ -385,6 +418,7 @@ const PDFTranslator = () => {
             setModalMessage("Generating PDF, please wait...");
             setModalType('info');
 
+            // The backend URL is now correct. The path should be /generate-pdf
             const backendUrl = `${RENDER_BACKEND_URL}/generate-pdf`;
             const response = await fetch(backendUrl, {
                 method: 'POST',
@@ -399,26 +433,24 @@ const PDFTranslator = () => {
             });
 
             if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(`PDF generation failed: ${errorData.error || response.statusText}`);
-            }
-
-            const contentDisposition = response.headers.get('Content-Disposition');
-            let filename = `${selectedFile.name.split('.')[0]}_translated_${targetLanguage}.pdf`;
-            if (contentDisposition && contentDisposition.indexOf('attachment') !== -1) {
-                const filenameMatch = contentDisposition.match(/filename="(.+)"/);
-                if (filenameMatch && filenameMatch[1]) {
-                    filename = filenameMatch[1];
+                let errorDetails = `Status: ${response.status} ${response.statusText || ''}`;
+                try {
+                    const errorData = await response.json();
+                    errorDetails = `PDF generation failed: ${errorData.error || JSON.stringify(errorData)}`;
+                } catch (e) {
+                     const rawText = await response.text();
+                    errorDetails = `PDF generation failed (Non-JSON response): ${rawText.substring(0, 200)}...`;
                 }
+                throw new Error(errorDetails);
             }
 
             const blob = await response.blob();
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = filename;
+            a.download = `${selectedFile.name.split('.')[0]}_translated_${targetLanguage}.pdf`;
             document.body.appendChild(a);
-            a.click();
+a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
 
@@ -448,7 +480,7 @@ const PDFTranslator = () => {
             <MessageModal message={modalMessage} onClose={() => setModalMessage('')} type={modalType} />
 
             <main className="flex-grow flex flex-col items-center justify-center p-4 md:p-8">
-                <div className="w-full max-w-sm md:max-w-2xl lg:max-w-4xl bg-white dark:bg-gray-800 shadow-xl rounded-xl p-6 md:p-8 space-y-6 md:space-y-8 border border-gray-200 dark:border-gray-700">
+                <div className="w-full max-w-sm md:max-w-2xl lg:max_w-4xl bg-white dark:bg-gray-800 shadow-xl rounded-xl p-6 md:p-8 space-y-6 md:space-y-8 border border-gray-200 dark:border-gray-700">
                     {/* User ID Display */}
                     {currentUser && (
                         <div className="text-sm text-gray-600 dark:text-gray-400 mb-4 text-center">
